@@ -1,7 +1,7 @@
-
 import argparse
 import torch
 import sys
+import os
 
 from transformers import AutoModelForSequenceClassification
 from trl import DPOConfig, DPOTrainer
@@ -9,51 +9,71 @@ from datasets import Dataset
 import random
 
 from model_utils import build_model, build_tokenizer
-from data_utils  import build_dataset
+from data_utils import build_dataset
 from train_utils import fl_training_grad
-import torch.nn.utils.rnn as rnn_utils
 
 def main(args):
     torch.manual_seed(args.seed)
+    
+    # Set environment variables to avoid tokenizer warnings
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-    # Build our LoRA+RedPajama model & tokenizer
+    # Build model & tokenizer
     server_model = build_model(rank=args.rank, alpha=args.alpha)
     tokenizer = build_tokenizer()
 
-    # Load reward model for online DPO
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        args.reward_model_checkpoint
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name()}")
+
+    # Load dataset first
+    print("Loading and preparing dataset...")
+    clients, testloader = build_dataset(
+        dataset_name=args.dataset,
+        batch_size=args.batch_size,
+        num_clients=args.clients,
+        iid_alpha=args.iid_alpha,
+        tokenizer=tokenizer,
+        max_length=512
     )
 
-    # Instantiate DPOTrainer (online mode)
+    # Create proper dummy dataset for DPO trainer (with prompt field)
+    dummy_data = [{
+        "prompt": "Human: Hello\n\nAssistant:",
+        "chosen": " Hi there! How can I help you today?",
+        "rejected": " Go away, I'm busy."
+    }]
+    dummy_dataset = Dataset.from_list(dummy_data)
+
+    # Create output directory
+    os.makedirs("./dpo_output", exist_ok=True)
+
+    # DPO trainer with proper dummy dataset
     dpo_trainer = DPOTrainer(
         model=server_model,
-        train_dataset=None,
+        train_dataset=dummy_dataset,  # Now has proper structure
         eval_dataset=None,
         tokenizer=tokenizer,
-        args=DPOConfig(  # Changed from **DPOConfig().to_dict()
+        args=DPOConfig(
+            output_dir="./dpo_output",
             beta=args.dpo_beta,
             max_length=512,
             max_prompt_length=256,
             learning_rate=args.client_lr,
+            per_device_train_batch_size=args.batch_size,
+            num_train_epochs=args.epochs,
+            logging_steps=10,
+            save_steps=1000,
+            eval_steps=1000,
+            remove_unused_columns=False,
+            dataloader_num_workers=0,
         ),
     )
 
-    # Server‐side optimizer
+    # Server optimizer
     server_opt = (torch.optim.Adam(server_model.parameters(), lr=args.server_lr)
                   if args.aggregation_method=="FedAdam" else None)
 
-    # Shard your data - PASS TOKENIZER HERE
-    clients, testloader = build_dataset(
-        dataset_name=args.dataset,  # This will now be "hh-rlhf" by default
-        batch_size=args.batch_size,
-        num_clients=args.clients,
-        iid_alpha=args.iid_alpha,
-        tokenizer=tokenizer,  # ADD THIS LINE
-        max_length=512  # ADD THIS LINE
-    )
-
-    # Run federated online‐DPO
+    print("Starting federated training...")
     fl_training_grad(
         server_model=server_model,
         dpo_trainer=dpo_trainer,
@@ -80,7 +100,7 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
 
     # Data & FL
-    parser.add_argument("--dataset", type=str, default="hh-rlhf")  # KEEP THIS ONE
+    parser.add_argument("--dataset", type=str, default="hh-rlhf")
     parser.add_argument("--clients",      type=int, default=5)
     parser.add_argument("--iid-alpha",    type=float, default=-1.0)
     parser.add_argument("--clients-round",type=int, default=2)
