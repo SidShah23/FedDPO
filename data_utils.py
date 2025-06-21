@@ -113,7 +113,7 @@ def _dirichlet_partition(labels, num_clients, alpha, num_classes):
     pbar = tqdm(enumerate(idx_by_class), total=num_classes, desc="Partitioning classes")
     
     for cls, idxs in pbar:
-        if len(idxs) == 0:  # Skip empty classes
+        if len(idxs) == 0:  
             continue
             
         np.random.shuffle(idxs)
@@ -134,7 +134,6 @@ def _dirichlet_partition(labels, num_clients, alpha, num_classes):
         
         pbar.set_postfix({'class': cls, 'samples': len(idxs)})
     
-    # Print client distribution
     print("\nClient data distribution:")
     for i, idxs in enumerate(client_idxs):
         print(f"  Client {i+1}: {len(idxs)} samples")

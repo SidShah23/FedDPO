@@ -15,18 +15,14 @@ from train_utils import fl_training_grad
 def main(args):
     torch.manual_seed(args.seed)
     
-    # Set environment variables to avoid tokenizer warnings
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-    # Build model & tokenizer
     server_model = build_model(rank=args.rank, alpha=args.alpha)
     tokenizer = build_tokenizer()
 
     if torch.cuda.is_available():
         print(f"Using GPU: {torch.cuda.get_device_name()}")
 
-    # Load dataset first
-    print("Loading and preparing dataset...")
     clients, testloader = build_dataset(
         dataset_name=args.dataset,
         batch_size=args.batch_size,
@@ -44,13 +40,13 @@ def main(args):
     }]
     dummy_dataset = Dataset.from_list(dummy_data)
 
-    # Create output directory
+    # Output directory
     os.makedirs("./dpo_output", exist_ok=True)
 
     # DPO trainer with proper dummy dataset
     dpo_trainer = DPOTrainer(
         model=server_model,
-        train_dataset=dummy_dataset,  # Now has proper structure
+        train_dataset=dummy_dataset, 
         eval_dataset=None,
         tokenizer=tokenizer,
         args=DPOConfig(
